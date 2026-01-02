@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="IAppraise/IAppraise.csproj" />
+  <Project Path="Integrations/Integrations.csproj" />
+</Solution>
