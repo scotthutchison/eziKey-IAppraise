@@ -2,6 +2,11 @@
 
 namespace Integrations.Dtos
 {
+    public class VehicleResponseDto
+    {
+        [JsonPropertyName("vehicles")]
+        public List<VehicleDto> Vehicles { get; set; } = new();
+    }
     public class VehicleDto
     {
         [JsonPropertyName("id")]

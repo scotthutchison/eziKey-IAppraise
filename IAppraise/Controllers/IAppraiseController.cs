@@ -1,4 +1,6 @@
-﻿using Microsoft.AspNetCore.Mvc;
+﻿using Integrations;
+using Integrations.Dtos;
+using Microsoft.AspNetCore.Mvc;
 
 namespace IAppraise.Controllers
 {
@@ -6,14 +8,18 @@ namespace IAppraise.Controllers
     [Route("[controller]")]
     public class IAppraiseController : ControllerBase
     {
-        [HttpGet(Name = "GetAllVehicles")]
-        public IEnumerable<WeatherForecast> Get()
+        private IIAppraiseApi _iAppraiseApi;
+
+        public IAppraiseController(IIAppraiseApi iAppraiseApi)
         {
-            return Enumerable.Range(1, 5).Select(index => new WeatherForecast
-            {
-                
-            })
-            .ToArray();
+            _iAppraiseApi = iAppraiseApi;
+        }
+
+        [HttpGet(Name = "GetAllVehicles")]
+        public async Task<IEnumerable<VehicleDto>> GetAllVehicles()
+        {
+            var result = await _iAppraiseApi.GetAllVehicles();
+            return result.Value?.Vehicles ?? Enumerable.Empty<VehicleDto>();
         }
     }
 }
