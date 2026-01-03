@@ -21,5 +21,12 @@ namespace IAppraise.Controllers
             var result = await _iAppraiseApi.GetAllVehicles();
             return result.Value?.Vehicles ?? Enumerable.Empty<VehicleDto>();
         }
+
+        [HttpGet(Name = "GetAllUnstartedVehicleEvents")]
+        public async Task<IEnumerable<VehicleEventDto>> GetAllUnstartedVehicleEvents()
+        {
+            var result = await _iAppraiseApi.GetAllUnstartedVehicleEvents();
+            return result.Value?.VehicleEvents ?? Enumerable.Empty<VehicleEventDto>();
+        }
     }
 }
