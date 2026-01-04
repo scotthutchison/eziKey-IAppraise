@@ -28,5 +28,19 @@ namespace IAppraise.Controllers
             var result = await _iAppraiseApi.GetAllUnstartedVehicleEvents();
             return result.Value?.VehicleEvents ?? Enumerable.Empty<VehicleEventDto>();
         }
+
+        [HttpPost("StartDrive")]
+            public async Task<VehicleDriveDto> StartDrive(int driveId, int vehicleId)
+        {
+            var result = await _iAppraiseApi.StartDrive(driveId, vehicleId);
+            return result.Value;
+        }
+
+        [HttpPost("EndDrive")]
+        public async Task<VehicleDriveDto> EndDrive(int driveId, int returningOdometer, string returningFuelLevel)
+        {
+            var result = await _iAppraiseApi.EndDrive(driveId, returningOdometer, returningFuelLevel);
+            return result.Value;
+        }
     }
 }
