@@ -1,125 +1,204 @@
-﻿using Integrations.Core;
+using Integrations.Auth;
+using Integrations.Configuration;
+using Integrations.Core;
 using Integrations.Dtos;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using System.Net;
+using System.Net.Http.Json;
 using System.Text.Json;
-
 
 namespace Integrations
 {
     public interface IIAppraiseApi
     {
-        Task<Result<VehicleResponseDto>> GetAllVehicles();
-        Task<Result<VehicleEventsResponse>> GetAllUnstartedVehicleEvents();
-        Task<Result<VehicleDriveDto>> StartDrive(int driveId, int vehicleId);
-        Task<Result<VehicleDriveDto>> EndDrive(int driveId, int returningOdometer, string returningFuelLevel);
+        Task<Result<VehicleResponseDto>> GetAllVehicles(
+            int dealershipId,
+            string? registrationNumber = null,
+            string? stockNumber = null,
+            CancellationToken ct = default);
+
+        Task<Result<VehicleEventsResponse>> GetAllUnstartedVehicleEvents(
+            int dealershipId,
+            CancellationToken ct = default);
+
+        Task<Result<VehicleDriveDto>> StartDrive(
+            int driveId,
+            int vehicleId,
+            CancellationToken ct = default);
+
+        Task<Result<VehicleDriveDto>> EndDrive(
+            int driveId,
+            int? returningOdometer,
+            string returningFuelLevel,
+            CancellationToken ct = default);
+
+        Task<Result<VehicleDto>> CreateVehicle(
+            CreateVehicleRequestDto request,
+            CancellationToken ct = default);
     }
+
     public class IAppraiseApi : IIAppraiseApi
     {
-        private static readonly string Token = "Token 66408c79336dea096b212c6c698d8e1b8c1753b7";
+        public const string HttpClientName = "IAppraiseApi";
 
+        private readonly IHttpClientFactory _httpClientFactory;
+        private readonly IIAppraiseAuthenticator _auth;
+        private readonly ILogger<IAppraiseApi> _logger;
 
-        public async Task<Result<VehicleResponseDto>> GetAllVehicles()
+        public IAppraiseApi(
+            IHttpClientFactory httpClientFactory,
+            IIAppraiseAuthenticator auth,
+            ILogger<IAppraiseApi> logger)
         {
-
-            HttpClient _httpClient = new HttpClient();
-            _httpClient.DefaultRequestHeaders.Add("Authorization", Token);
-
-            string url = "https://www.testdriveloan.com.au/api/vehicle/ezikey-list-all-vehicles-at-site/?dealership=251";
-
-            var req = new HttpRequestMessage(HttpMethod.Get, url);
-            var response = await _httpClient.SendAsync(req);
-
-            if (response.IsSuccessStatusCode)
-            {
-                var json = await response.Content.ReadAsStringAsync();
-                var result = new Result<VehicleResponseDto>(JsonSerializer.Deserialize<VehicleResponseDto>(json)!);
-                return result;
-            }
-            else
-                return new Result<VehicleResponseDto>("Error occured in authenticating with Shift - Refer to Broos Support for assistance.");
+            _httpClientFactory = httpClientFactory;
+            _auth = auth;
+            _logger = logger;
         }
 
-        public async Task<Result<VehicleEventsResponse>> GetAllUnstartedVehicleEvents()
+        public Task<Result<VehicleResponseDto>> GetAllVehicles(
+            int dealershipId,
+            string? registrationNumber = null,
+            string? stockNumber = null,
+            CancellationToken ct = default)
         {
+            var query = new List<string> { $"dealership={dealershipId}" };
+            if (!string.IsNullOrWhiteSpace(registrationNumber))
+                query.Add($"registration_number={Uri.EscapeDataString(registrationNumber)}");
+            if (!string.IsNullOrWhiteSpace(stockNumber))
+                query.Add($"stock_number={Uri.EscapeDataString(stockNumber)}");
 
-            HttpClient _httpClient = new HttpClient();
-            _httpClient.DefaultRequestHeaders.Add("Authorization", Token);
-
-            string url = "https://www.testdriveloan.com.au/api/vehicle-event/ezikey-get-all-unstarted-vehicle-events/?dealership=251";
-
-            var req = new HttpRequestMessage(HttpMethod.Get, url);
-            var response = await _httpClient.SendAsync(req);
-
-            if (response.IsSuccessStatusCode)
-            {
-                var json = await response.Content.ReadAsStringAsync();
-                var result = new Result<VehicleEventsResponse>(JsonSerializer.Deserialize<VehicleEventsResponse>(json)!);
-                return result;
-            }
-            else
-                return new Result<VehicleEventsResponse>("Error occured in authenticating with Shift - Refer to Broos Support for assistance.");
+            var url = $"vehicle/ezikey-list-all-vehicles-at-site/?{string.Join("&", query)}";
+            return SendAsync<VehicleResponseDto>(HttpMethod.Get, url, contentFactory: null, ct);
         }
 
-        public async Task<Result<VehicleDriveDto>> StartDrive(int driveId, int vehicleId)
+        public Task<Result<VehicleEventsResponse>> GetAllUnstartedVehicleEvents(
+            int dealershipId,
+            CancellationToken ct = default)
         {
-            HttpClient _httpClient = new HttpClient();
-            _httpClient.DefaultRequestHeaders.Add("Authorization", Token);
+            var url = $"vehicle-event/ezikey-get-all-unstarted-vehicle-events/?dealership={dealershipId}";
+            return SendAsync<VehicleEventsResponse>(HttpMethod.Get, url, contentFactory: null, ct);
+        }
 
-            string url = "https://www.testdriveloan.com.au/api/vehicle-event/" + driveId + "/ezikey-start-drive/";
+        public Task<Result<VehicleDriveDto>> StartDrive(
+            int driveId,
+            int vehicleId,
+            CancellationToken ct = default)
+        {
+            var url = $"vehicle-event/{driveId}/ezikey-start-drive/";
 
-            // multipart/form-data
-            using var form = new MultipartFormDataContent();
-
-            // form field: vehicle
-            form.Add(new StringContent(vehicleId.ToString()), "vehicle");
-
-            using var req = new HttpRequestMessage(HttpMethod.Post, url)
+            HttpContent Factory()
             {
-                Content = form
-            };
+                var form = new MultipartFormDataContent();
+                form.Add(new StringContent(vehicleId.ToString()), "vehicle");
+                return form;
+            }
 
-            var response = await _httpClient.SendAsync(req);
+            return SendAsync<VehicleDriveDto>(HttpMethod.Post, url, Factory, ct);
+        }
+
+        public Task<Result<VehicleDriveDto>> EndDrive(
+            int driveId,
+            int? returningOdometer,
+            string returningFuelLevel,
+            CancellationToken ct = default)
+        {
+            var url = $"vehicle-event/{driveId}/ezikey-return-drive/";
+
+            HttpContent Factory()
+            {
+                var form = new MultipartFormDataContent();
+                if (returningOdometer.HasValue)
+                    form.Add(new StringContent(returningOdometer.Value.ToString()), "returning_odometer");
+                form.Add(new StringContent(returningFuelLevel ?? string.Empty), "returning_fuel_level");
+                return form;
+            }
+
+            return SendAsync<VehicleDriveDto>(HttpMethod.Post, url, Factory, ct);
+        }
+
+        public Task<Result<VehicleDto>> CreateVehicle(
+            CreateVehicleRequestDto request,
+            CancellationToken ct = default)
+        {
+            var url = "vehicle/create-ezikey-vehicle/";
+            HttpContent Factory() => JsonContent.Create(request);
+            return SendAsync<VehicleDto>(HttpMethod.Post, url, Factory, ct);
+        }
+
+        private async Task<Result<T>> SendAsync<T>(
+            HttpMethod method,
+            string url,
+            Func<HttpContent>? contentFactory,
+            CancellationToken ct)
+        {
+            var response = await SendOnceAsync(method, url, contentFactory, ct);
+
+            if (response.StatusCode == HttpStatusCode.Unauthorized)
+            {
+                _logger.LogInformation("iAppraise returned 401 for {Method} {Url}, invalidating cached token and retrying.", method, url);
+                response.Dispose();
+                _auth.Invalidate();
+                response = await SendOnceAsync(method, url, contentFactory, ct);
+            }
 
             if (!response.IsSuccessStatusCode)
             {
-                return new Result<VehicleDriveDto>(
-                    "Error occurred in authenticating with Shift - Refer to Broos Support for assistance.");
+                var body = await SafeReadAsync(response, ct);
+                _logger.LogWarning("iAppraise {Method} {Url} returned {Status}: {Body}", method, url, (int)response.StatusCode, body);
+                return new Result<T>($"iAppraise returned {(int)response.StatusCode} {response.ReasonPhrase}");
             }
 
-            var json = await response.Content.ReadAsStringAsync();
-            var dto = JsonSerializer.Deserialize<VehicleDriveDto>(json);
-
-            return new Result<VehicleDriveDto>(dto!);
+            try
+            {
+                var stream = await response.Content.ReadAsStreamAsync(ct);
+                var value = await JsonSerializer.DeserializeAsync<T>(stream, cancellationToken: ct);
+                if (value is null)
+                {
+                    return new Result<T>("iAppraise returned empty body.");
+                }
+                return new Result<T>(value);
+            }
+            catch (JsonException ex)
+            {
+                _logger.LogError(ex, "Failed to deserialize iAppraise response from {Method} {Url}", method, url);
+                return new Result<T>("Failed to parse iAppraise response.");
+            }
+            finally
+            {
+                response.Dispose();
+            }
         }
 
-        public async Task<Result<VehicleDriveDto>> EndDrive(int driveId, int returningOdometer, string returningFuelLevel)
+        private async Task<HttpResponseMessage> SendOnceAsync(
+            HttpMethod method,
+            string url,
+            Func<HttpContent>? contentFactory,
+            CancellationToken ct)
         {
-            HttpClient _httpClient = new HttpClient();
-            _httpClient.DefaultRequestHeaders.Add("Authorization", Token);
-            string url = "https://www.testdriveloan.com.au/api/vehicle-event/" + driveId + "/ezikey-end-drive/";
+            var token = await _auth.GetTokenAsync(ct);
+            var http = _httpClientFactory.CreateClient(HttpClientName);
 
-            // multipart/form-data
-            using var form = new MultipartFormDataContent();
-            // form field: returning_odometer
-            form.Add(new StringContent(returningOdometer.ToString()), "returning_odometer");
-            // form field: returning_fuel_level
-            form.Add(new StringContent(returningFuelLevel), "returning_fuel_level");
-            
-            using var req = new HttpRequestMessage(HttpMethod.Post, url)
+            var req = new HttpRequestMessage(method, url);
+            req.Headers.TryAddWithoutValidation("Authorization", $"Token {token}");
+            if (contentFactory is not null)
             {
-                Content = form
-            };
-
-            var response = await _httpClient.SendAsync(req);
-
-            if (!response.IsSuccessStatusCode)
-            {
-                return new Result<VehicleDriveDto>(
-                    "Error occurred in authenticating with Shift - Refer to Broos Support for assistance.");
+                req.Content = contentFactory();
             }
 
-            var json = await response.Content.ReadAsStringAsync();
-            var dto = JsonSerializer.Deserialize<VehicleDriveDto>(json);
-            return new Result<VehicleDriveDto>(dto!);
+            return await http.SendAsync(req, ct);
+        }
+
+        private static async Task<string> SafeReadAsync(HttpResponseMessage response, CancellationToken ct)
+        {
+            try
+            {
+                return await response.Content.ReadAsStringAsync(ct);
+            }
+            catch
+            {
+                return string.Empty;
+            }
         }
     }
 }
