@@ -1,73 +1,46 @@
-using Integrations;
-using Integrations.Configuration;
+﻿using Integrations;
 using Integrations.Dtos;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.Extensions.Options;
 
 namespace IAppraise.Controllers
 {
     [ApiController]
-    [Route("api/iappraise")]
+    [Route("[controller]")]
     public class IAppraiseController : ControllerBase
     {
-        private readonly IIAppraiseApi _iAppraiseApi;
-        private readonly IAppraiseOptions _options;
+        private IIAppraiseApi _iAppraiseApi;
 
-        public IAppraiseController(IIAppraiseApi iAppraiseApi, IOptions<IAppraiseOptions> options)
+        public IAppraiseController(IIAppraiseApi iAppraiseApi)
         {
             _iAppraiseApi = iAppraiseApi;
-            _options = options.Value;
         }
 
         [HttpGet("vehicles")]
-        public async Task<IEnumerable<VehicleDto>> GetAllVehicles(
-            [FromQuery] int? dealershipId,
-            [FromQuery] string? registrationNumber,
-            [FromQuery] string? stockNumber,
-            CancellationToken ct)
+        public async Task<IEnumerable<VehicleDto>> GetAllVehicles()
         {
-            var dealership = dealershipId ?? _options.DefaultDealershipId;
-            var result = await _iAppraiseApi.GetAllVehicles(dealership, registrationNumber, stockNumber, ct);
+            var result = await _iAppraiseApi.GetAllVehicles();
             return result.Value?.Vehicles ?? Enumerable.Empty<VehicleDto>();
         }
 
-        [HttpGet("vehicle-events/unstarted")]
-        public async Task<IEnumerable<VehicleEventDto>> GetAllUnstartedVehicleEvents(
-            [FromQuery] int? dealershipId,
-            CancellationToken ct)
+        [HttpGet("vehicle-events")]
+        public async Task<IEnumerable<VehicleEventDto>> GetAllUnstartedVehicleEvents()
         {
-            var dealership = dealershipId ?? _options.DefaultDealershipId;
-            var result = await _iAppraiseApi.GetAllUnstartedVehicleEvents(dealership, ct);
+            var result = await _iAppraiseApi.GetAllUnstartedVehicleEvents();
             return result.Value?.VehicleEvents ?? Enumerable.Empty<VehicleEventDto>();
         }
 
-        [HttpPost("vehicle-events/{driveId:int}/start")]
-        public async Task<ActionResult<VehicleDriveDto>> StartDrive(
-            int driveId,
-            [FromQuery] int vehicleId,
-            CancellationToken ct)
+        [HttpPost("StartDrive")]
+            public async Task<VehicleDriveDto> StartDrive(int driveId, int vehicleId)
         {
-            var result = await _iAppraiseApi.StartDrive(driveId, vehicleId, ct);
-            if (!result.Succeeded)
-            {
-                return Problem(string.Join("; ", result.ErrorList), statusCode: StatusCodes.Status502BadGateway);
-            }
-            return Ok(result.Value);
+            var result = await _iAppraiseApi.StartDrive(driveId, vehicleId);
+            return result.Value;
         }
 
-        [HttpPost("vehicle-events/{driveId:int}/end")]
-        public async Task<ActionResult<VehicleDriveDto>> EndDrive(
-            int driveId,
-            [FromQuery] int returningOdometer,
-            [FromQuery] string returningFuelLevel,
-            CancellationToken ct)
+        [HttpPost("EndDrive")]
+        public async Task<VehicleDriveDto> EndDrive(int driveId, int returningOdometer, string returningFuelLevel)
         {
-            var result = await _iAppraiseApi.EndDrive(driveId, returningOdometer, returningFuelLevel, ct);
-            if (!result.Succeeded)
-            {
-                return Problem(string.Join("; ", result.ErrorList), statusCode: StatusCodes.Status502BadGateway);
-            }
-            return Ok(result.Value);
+            var result = await _iAppraiseApi.EndDrive(driveId, returningOdometer, returningFuelLevel);
+            return result.Value;
         }
     }
 }

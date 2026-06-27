@@ -42,9 +42,14 @@ app.UseSwaggerUI(options =>
 {
     options.SwaggerEndpoint("/swagger/v1/swagger.json", "eziKey iAppraise Facade v1");
     options.RoutePrefix = "swagger";
-});
-
-app.UseHttpsRedirection();
+    //else
+    //  options.RoutePrefix = string.Empty;
+}
+);
+if (!app.Environment.IsDevelopment())
+{
+    app.UseHttpsRedirection();
+}
 
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 
