@@ -67,13 +67,21 @@ namespace IAppraise.Controllers
                 VehicleDto? match = null;
 
                 if (!string.IsNullOrWhiteSpace(request.RegistrationNumber))
-                    match = vehicles.FirstOrDefault(v => string.Equals(v.RegistrationNumber, request.RegistrationNumber, StringComparison.OrdinalIgnoreCase));
+                    match = vehicles.FirstOrDefault(v => string.Equals((v.RegistrationNumber ?? "").Trim(), request.RegistrationNumber.Trim(), StringComparison.OrdinalIgnoreCase));
 
                 if (match == null && !string.IsNullOrWhiteSpace(request.StockNumber))
-                    match = vehicles.FirstOrDefault(v => string.Equals(v.StockNumber, request.StockNumber, StringComparison.OrdinalIgnoreCase));
+                    match = vehicles.FirstOrDefault(v => string.Equals((v.StockNumber ?? "").Trim(), request.StockNumber.Trim(), StringComparison.OrdinalIgnoreCase));
 
                 if (match == null)
-                    return NotFound($"No TDL vehicle found matching rego='{request.RegistrationNumber}' or stock='{request.StockNumber}'. createIfMissing is not yet supported by the local facade.");
+                {
+                    // Include a sample of what TDL actually returned so the touchscreen log
+                    // shows whether the inventory is empty vs. contains different rego/stock.
+                    var sample = string.Join(", ", vehicles.Take(5).Select(v => $"[{v.Id}] rego='{v.RegistrationNumber}' stock='{v.StockNumber}'"));
+                    if (vehicles.Count > 5) sample += $" (+{vehicles.Count - 5} more)";
+                    if (vehicles.Count == 0) sample = "(TDL returned no vehicles for this dealership)";
+
+                    return NotFound($"No TDL vehicle found matching rego='{request.RegistrationNumber}' or stock='{request.StockNumber}'. createIfMissing is not yet supported. TDL returned {vehicles.Count} vehicle(s): {sample}");
+                }
 
                 tdlVehicleId = match.Id;
             }

@@ -35,7 +35,10 @@ namespace Integrations
                 return result;
             }
             else
-                return new Result<VehicleResponseDto>("Error occured in authenticating with Shift - Refer to Broos Support for assistance.");
+            {
+                var body = await response.Content.ReadAsStringAsync();
+                return new Result<VehicleResponseDto>($"TDL GetAllVehicles returned {(int)response.StatusCode} {response.ReasonPhrase}: {body}");
+            }
         }
 
         public async Task<Result<VehicleEventsResponse>> GetAllUnstartedVehicleEvents()
@@ -56,7 +59,10 @@ namespace Integrations
                 return result;
             }
             else
-                return new Result<VehicleEventsResponse>("Error occured in authenticating with Shift - Refer to Broos Support for assistance.");
+            {
+                var body = await response.Content.ReadAsStringAsync();
+                return new Result<VehicleEventsResponse>($"TDL GetAllUnstartedVehicleEvents returned {(int)response.StatusCode} {response.ReasonPhrase}: {body}");
+            }
         }
 
         public async Task<Result<VehicleDriveDto>> StartDrive(int driveId, int vehicleId)
@@ -81,8 +87,8 @@ namespace Integrations
 
             if (!response.IsSuccessStatusCode)
             {
-                return new Result<VehicleDriveDto>(
-                    "Error occurred in authenticating with Shift - Refer to Broos Support for assistance.");
+                var body = await response.Content.ReadAsStringAsync();
+                return new Result<VehicleDriveDto>($"TDL StartDrive({driveId}, vehicle={vehicleId}) returned {(int)response.StatusCode} {response.ReasonPhrase}: {body}");
             }
 
             var json = await response.Content.ReadAsStringAsync();
@@ -113,8 +119,8 @@ namespace Integrations
 
             if (!response.IsSuccessStatusCode)
             {
-                return new Result<VehicleDriveDto>(
-                    "Error occurred in authenticating with Shift - Refer to Broos Support for assistance.");
+                var body = await response.Content.ReadAsStringAsync();
+                return new Result<VehicleDriveDto>($"TDL EndDrive({driveId}) returned {(int)response.StatusCode} {response.ReasonPhrase}: {body}");
             }
 
             var json = await response.Content.ReadAsStringAsync();
