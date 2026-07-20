@@ -9,6 +9,11 @@ namespace IAppraise.Controllers
     [Route("api/bookings")]
     public class BookingsController : ControllerBase
     {
+        // Headers the touchscreen must send on every call so this API can route to the
+        // correct TDL dealership with the correct credentials.
+        private const string DealershipHeader = "X-Tdl-Dealership-Id";
+        private const string TokenHeader = "X-Tdl-Api-Token";
+
         private readonly IIAppraiseApi _iAppraiseApi;
 
         public BookingsController(IIAppraiseApi iAppraiseApi)
@@ -19,7 +24,9 @@ namespace IAppraise.Controllers
         [HttpGet]
         public async Task<ActionResult<IEnumerable<BookingSummaryDto>>> GetOpenBookings()
         {
-            var result = await _iAppraiseApi.GetAllUnstartedVehicleEvents();
+            if (!TryGetContext(out var ctx, out var badRequest)) return badRequest!;
+
+            var result = await _iAppraiseApi.GetAllUnstartedVehicleEvents(ctx);
             if (!result.Succeeded)
                 return Problem(string.Join("; ", result.ErrorList), statusCode: 502);
 
@@ -51,15 +58,16 @@ namespace IAppraise.Controllers
         {
             if (request == null)
                 return BadRequest("Request body is required.");
+            if (!TryGetContext(out var ctx, out var badRequest)) return badRequest!;
 
             // WPF doesn't know TDL's internal vehicle id — it only knows rego / stock. Resolve here
-            // by pulling the site's vehicle list from TDL and matching. createIfMissing is still a
-            // TODO (needs a TDL create-vehicle endpoint).
+            // by pulling the dealership's vehicle list from TDL and matching. createIfMissing is still
+            // a TODO (needs a TDL create-vehicle endpoint).
             var tdlVehicleId = request.IAppraiseVehicleId;
 
             if (!tdlVehicleId.HasValue)
             {
-                var vehiclesResult = await _iAppraiseApi.GetAllVehicles();
+                var vehiclesResult = await _iAppraiseApi.GetAllVehicles(ctx);
                 if (!vehiclesResult.Succeeded)
                     return Problem("Could not fetch TDL vehicle list: " + string.Join("; ", vehiclesResult.ErrorList ?? new() { "unknown" }), statusCode: 502);
 
@@ -74,8 +82,6 @@ namespace IAppraise.Controllers
 
                 if (match == null)
                 {
-                    // Include a sample of what TDL actually returned so the touchscreen log
-                    // shows whether the inventory is empty vs. contains different rego/stock.
                     var sample = string.Join(", ", vehicles.Take(5).Select(v => $"[{v.Id}] rego='{v.RegistrationNumber}' stock='{v.StockNumber}'"));
                     if (vehicles.Count > 5) sample += $" (+{vehicles.Count - 5} more)";
                     if (vehicles.Count == 0) sample = "(TDL returned no vehicles for this dealership)";
@@ -86,7 +92,7 @@ namespace IAppraise.Controllers
                 tdlVehicleId = match.Id;
             }
 
-            var result = await _iAppraiseApi.StartDrive(bookingId, tdlVehicleId.Value);
+            var result = await _iAppraiseApi.StartDrive(ctx, bookingId, tdlVehicleId.Value);
             if (!result.Succeeded || result.Value == null)
                 return Problem(string.Join("; ", result.ErrorList ?? new() { "StartDrive failed" }), statusCode: 502);
 
@@ -103,12 +109,41 @@ namespace IAppraise.Controllers
         {
             if (request == null)
                 return BadRequest("Request body is required.");
+            if (!TryGetContext(out var ctx, out var badRequest)) return badRequest!;
 
-            var result = await _iAppraiseApi.EndDrive(bookingId, request.ReturningOdometer, request.ReturningFuelLevel ?? string.Empty);
+            var result = await _iAppraiseApi.EndDrive(ctx, bookingId, request.ReturningOdometer, request.ReturningFuelLevel ?? string.Empty);
             if (!result.Succeeded || result.Value == null)
                 return Problem(string.Join("; ", result.ErrorList ?? new() { "EndDrive failed" }), statusCode: 502);
 
             return Ok(new ReturnResponseDto { BookingId = result.Value.Id });
+        }
+
+        private bool TryGetContext(out TdlContext ctx, out ActionResult? badRequest)
+        {
+            ctx = null!;
+            badRequest = null;
+
+            var dealershipRaw = Request.Headers[DealershipHeader].ToString();
+            var token = Request.Headers[TokenHeader].ToString();
+
+            if (string.IsNullOrWhiteSpace(dealershipRaw))
+            {
+                badRequest = BadRequest($"Missing required header '{DealershipHeader}'.");
+                return false;
+            }
+            if (!int.TryParse(dealershipRaw, out var dealershipId))
+            {
+                badRequest = BadRequest($"Header '{DealershipHeader}' must be an integer; got '{dealershipRaw}'.");
+                return false;
+            }
+            if (string.IsNullOrWhiteSpace(token))
+            {
+                badRequest = BadRequest($"Missing required header '{TokenHeader}'.");
+                return false;
+            }
+
+            ctx = new TdlContext(dealershipId, token);
+            return true;
         }
     }
 }

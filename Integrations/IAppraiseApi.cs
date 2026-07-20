@@ -1,5 +1,6 @@
-﻿using Integrations.Core;
+using Integrations.Core;
 using Integrations.Dtos;
+using Microsoft.Extensions.Configuration;
 using System.Text.Json;
 
 
@@ -7,83 +8,80 @@ namespace Integrations
 {
     public interface IIAppraiseApi
     {
-        Task<Result<VehicleResponseDto>> GetAllVehicles();
-        Task<Result<VehicleEventsResponse>> GetAllUnstartedVehicleEvents();
-        Task<Result<VehicleDriveDto>> StartDrive(int driveId, int vehicleId);
-        Task<Result<VehicleDriveDto>> EndDrive(int driveId, int returningOdometer, string returningFuelLevel);
+        Task<Result<VehicleResponseDto>> GetAllVehicles(TdlContext ctx);
+        Task<Result<VehicleEventsResponse>> GetAllUnstartedVehicleEvents(TdlContext ctx);
+        Task<Result<VehicleDriveDto>> StartDrive(TdlContext ctx, int driveId, int vehicleId);
+        Task<Result<VehicleDriveDto>> EndDrive(TdlContext ctx, int driveId, int returningOdometer, string returningFuelLevel);
     }
+
+    /// <summary>
+    /// Per-request TDL tenant context. Passed in by the caller (touchscreen) so this API can
+    /// serve multiple dealerships with a single deployment.
+    /// </summary>
+    public sealed record TdlContext(int DealershipId, string Token);
+
     public class IAppraiseApi : IIAppraiseApi
     {
-        private static readonly string Token = "Token 66408c79336dea096b212c6c698d8e1b8c1753b7";
+        private readonly string _baseUrl;
 
-
-        public async Task<Result<VehicleResponseDto>> GetAllVehicles()
+        public IAppraiseApi(IConfiguration config)
         {
+            // Only the TDL base URL is server-side config now — the dealership id and API token
+            // come from the caller so this API can be shared across dealerships.
+            _baseUrl = (config["IAppraise:BaseUrl"] ?? "https://www.testdriveloan.com.au").TrimEnd('/');
+        }
 
-            HttpClient _httpClient = new HttpClient();
-            _httpClient.DefaultRequestHeaders.Add("Authorization", Token);
+        private HttpClient CreateClient(TdlContext ctx)
+        {
+            var client = new HttpClient();
+            client.DefaultRequestHeaders.Add("Authorization", ctx.Token);
+            return client;
+        }
 
-            string url = "https://www.testdriveloan.com.au/api/vehicle/ezikey-list-all-vehicles-at-site/?dealership=251";
+        public async Task<Result<VehicleResponseDto>> GetAllVehicles(TdlContext ctx)
+        {
+            var client = CreateClient(ctx);
+            var url = $"{_baseUrl}/api/vehicle/ezikey-list-all-vehicles-at-site/?dealership={ctx.DealershipId}";
 
-            var req = new HttpRequestMessage(HttpMethod.Get, url);
-            var response = await _httpClient.SendAsync(req);
+            var response = await client.SendAsync(new HttpRequestMessage(HttpMethod.Get, url));
 
             if (response.IsSuccessStatusCode)
             {
                 var json = await response.Content.ReadAsStringAsync();
-                var result = new Result<VehicleResponseDto>(JsonSerializer.Deserialize<VehicleResponseDto>(json)!);
-                return result;
+                return new Result<VehicleResponseDto>(JsonSerializer.Deserialize<VehicleResponseDto>(json)!);
             }
-            else
-            {
-                var body = await response.Content.ReadAsStringAsync();
-                return new Result<VehicleResponseDto>($"TDL GetAllVehicles returned {(int)response.StatusCode} {response.ReasonPhrase}: {body}");
-            }
+
+            var body = await response.Content.ReadAsStringAsync();
+            return new Result<VehicleResponseDto>($"TDL GetAllVehicles (dealership={ctx.DealershipId}) returned {(int)response.StatusCode} {response.ReasonPhrase}: {body}");
         }
 
-        public async Task<Result<VehicleEventsResponse>> GetAllUnstartedVehicleEvents()
+        public async Task<Result<VehicleEventsResponse>> GetAllUnstartedVehicleEvents(TdlContext ctx)
         {
+            var client = CreateClient(ctx);
+            var url = $"{_baseUrl}/api/vehicle-event/ezikey-get-all-unstarted-vehicle-events/?dealership={ctx.DealershipId}";
 
-            HttpClient _httpClient = new HttpClient();
-            _httpClient.DefaultRequestHeaders.Add("Authorization", Token);
-
-            string url = "https://www.testdriveloan.com.au/api/vehicle-event/ezikey-get-all-unstarted-vehicle-events/?dealership=251";
-
-            var req = new HttpRequestMessage(HttpMethod.Get, url);
-            var response = await _httpClient.SendAsync(req);
+            var response = await client.SendAsync(new HttpRequestMessage(HttpMethod.Get, url));
 
             if (response.IsSuccessStatusCode)
             {
                 var json = await response.Content.ReadAsStringAsync();
-                var result = new Result<VehicleEventsResponse>(JsonSerializer.Deserialize<VehicleEventsResponse>(json)!);
-                return result;
+                return new Result<VehicleEventsResponse>(JsonSerializer.Deserialize<VehicleEventsResponse>(json)!);
             }
-            else
-            {
-                var body = await response.Content.ReadAsStringAsync();
-                return new Result<VehicleEventsResponse>($"TDL GetAllUnstartedVehicleEvents returned {(int)response.StatusCode} {response.ReasonPhrase}: {body}");
-            }
+
+            var body = await response.Content.ReadAsStringAsync();
+            return new Result<VehicleEventsResponse>($"TDL GetAllUnstartedVehicleEvents (dealership={ctx.DealershipId}) returned {(int)response.StatusCode} {response.ReasonPhrase}: {body}");
         }
 
-        public async Task<Result<VehicleDriveDto>> StartDrive(int driveId, int vehicleId)
+        public async Task<Result<VehicleDriveDto>> StartDrive(TdlContext ctx, int driveId, int vehicleId)
         {
-            HttpClient _httpClient = new HttpClient();
-            _httpClient.DefaultRequestHeaders.Add("Authorization", Token);
+            var client = CreateClient(ctx);
+            var url = $"{_baseUrl}/api/vehicle-event/{driveId}/ezikey-start-drive/";
 
-            string url = "https://www.testdriveloan.com.au/api/vehicle-event/" + driveId + "/ezikey-start-drive/";
-
-            // multipart/form-data
             using var form = new MultipartFormDataContent();
-
-            // form field: vehicle
             form.Add(new StringContent(vehicleId.ToString()), "vehicle");
 
-            using var req = new HttpRequestMessage(HttpMethod.Post, url)
-            {
-                Content = form
-            };
-
-            var response = await _httpClient.SendAsync(req);
+            using var req = new HttpRequestMessage(HttpMethod.Post, url) { Content = form };
+            var response = await client.SendAsync(req);
 
             if (!response.IsSuccessStatusCode)
             {
@@ -93,29 +91,20 @@ namespace Integrations
 
             var json = await response.Content.ReadAsStringAsync();
             var dto = JsonSerializer.Deserialize<VehicleDriveDto>(json);
-
             return new Result<VehicleDriveDto>(dto!);
         }
 
-        public async Task<Result<VehicleDriveDto>> EndDrive(int driveId, int returningOdometer, string returningFuelLevel)
+        public async Task<Result<VehicleDriveDto>> EndDrive(TdlContext ctx, int driveId, int returningOdometer, string returningFuelLevel)
         {
-            HttpClient _httpClient = new HttpClient();
-            _httpClient.DefaultRequestHeaders.Add("Authorization", Token);
-            string url = "https://www.testdriveloan.com.au/api/vehicle-event/" + driveId + "/ezikey-end-drive/";
+            var client = CreateClient(ctx);
+            var url = $"{_baseUrl}/api/vehicle-event/{driveId}/ezikey-end-drive/";
 
-            // multipart/form-data
             using var form = new MultipartFormDataContent();
-            // form field: returning_odometer
             form.Add(new StringContent(returningOdometer.ToString()), "returning_odometer");
-            // form field: returning_fuel_level
             form.Add(new StringContent(returningFuelLevel), "returning_fuel_level");
-            
-            using var req = new HttpRequestMessage(HttpMethod.Post, url)
-            {
-                Content = form
-            };
 
-            var response = await _httpClient.SendAsync(req);
+            using var req = new HttpRequestMessage(HttpMethod.Post, url) { Content = form };
+            var response = await client.SendAsync(req);
 
             if (!response.IsSuccessStatusCode)
             {
