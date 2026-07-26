@@ -10,6 +10,7 @@ namespace Integrations
     {
         Task<Result<VehicleResponseDto>> GetAllVehicles(TdlContext ctx);
         Task<Result<VehicleEventsResponse>> GetAllUnstartedVehicleEvents(TdlContext ctx);
+        Task<Result<VehicleDto>> CreateVehicle(TdlContext ctx, CreateVehicleRequestDto request);
         Task<Result<VehicleDriveDto>> StartDrive(TdlContext ctx, int driveId, int vehicleId);
         Task<Result<VehicleDriveDto>> EndDrive(TdlContext ctx, int driveId, int returningOdometer, string returningFuelLevel);
     }
@@ -70,6 +71,31 @@ namespace Integrations
 
             var body = await response.Content.ReadAsStringAsync();
             return new Result<VehicleEventsResponse>($"TDL GetAllUnstartedVehicleEvents (dealership={ctx.DealershipId}) returned {(int)response.StatusCode} {response.ReasonPhrase}: {body}");
+        }
+
+        public async Task<Result<VehicleDto>> CreateVehicle(TdlContext ctx, CreateVehicleRequestDto request)
+        {
+            // Force the dealership on the request to match the caller's context — the API is
+            // multi-tenant and mustn't let one dealer create vehicles under another.
+            request.Dealership = ctx.DealershipId;
+
+            var client = CreateClient(ctx);
+            var url = $"{_baseUrl}/api/vehicle/create-ezikey-vehicle/";
+
+            var body = JsonSerializer.Serialize(request);
+            var content = new StringContent(body, System.Text.Encoding.UTF8, "application/json");
+
+            var response = await client.PostAsync(url, content);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                var errBody = await response.Content.ReadAsStringAsync();
+                return new Result<VehicleDto>($"TDL CreateVehicle (dealership={ctx.DealershipId}, rego='{request.RegistrationNumber}', stock='{request.StockNumber}') returned {(int)response.StatusCode} {response.ReasonPhrase}: {errBody}");
+            }
+
+            var json = await response.Content.ReadAsStringAsync();
+            var dto = JsonSerializer.Deserialize<VehicleDto>(json);
+            return new Result<VehicleDto>(dto!);
         }
 
         public async Task<Result<VehicleDriveDto>> StartDrive(TdlContext ctx, int driveId, int vehicleId)

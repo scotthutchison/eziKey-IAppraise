@@ -61,9 +61,10 @@ namespace IAppraise.Controllers
             if (!TryGetContext(out var ctx, out var badRequest)) return badRequest!;
 
             // WPF doesn't know TDL's internal vehicle id — it only knows rego / stock. Resolve here
-            // by pulling the dealership's vehicle list from TDL and matching. createIfMissing is still
-            // a TODO (needs a TDL create-vehicle endpoint).
+            // by pulling the dealership's vehicle list from TDL and matching. If no match and
+            // request.CreateIfMissing is true, POST the vehicle to TDL first, then use the new id.
             var tdlVehicleId = request.IAppraiseVehicleId;
+            var vehicleWasCreated = false;
 
             if (!tdlVehicleId.HasValue)
             {
@@ -80,16 +81,40 @@ namespace IAppraise.Controllers
                 if (match == null && !string.IsNullOrWhiteSpace(request.StockNumber))
                     match = vehicles.FirstOrDefault(v => string.Equals((v.StockNumber ?? "").Trim(), request.StockNumber.Trim(), StringComparison.OrdinalIgnoreCase));
 
-                if (match == null)
+                if (match != null)
+                {
+                    tdlVehicleId = match.Id;
+                }
+                else if (request.CreateIfMissing)
+                {
+                    var createResult = await _iAppraiseApi.CreateVehicle(ctx, new CreateVehicleRequestDto
+                    {
+                        Dealership = ctx.DealershipId,
+                        Make = request.Make,
+                        Model = request.Model,
+                        ModelYear = request.ModelYear,
+                        NewUsed = request.NewUsed,
+                        StockNumber = request.StockNumber,
+                        RegistrationNumber = request.RegistrationNumber,
+                        VinNumber = request.VinNumber,
+                        Colour = request.Colour,
+                        Odometer = request.Odometer,
+                    });
+
+                    if (!createResult.Succeeded || createResult.Value == null)
+                        return Problem($"TDL vehicle create failed for rego='{request.RegistrationNumber}' stock='{request.StockNumber}': {string.Join("; ", createResult.ErrorList ?? new() { "unknown" })}", statusCode: 502);
+
+                    tdlVehicleId = createResult.Value.Id;
+                    vehicleWasCreated = true;
+                }
+                else
                 {
                     var sample = string.Join(", ", vehicles.Take(5).Select(v => $"[{v.Id}] rego='{v.RegistrationNumber}' stock='{v.StockNumber}'"));
                     if (vehicles.Count > 5) sample += $" (+{vehicles.Count - 5} more)";
                     if (vehicles.Count == 0) sample = "(TDL returned no vehicles for this dealership)";
 
-                    return NotFound($"No TDL vehicle found matching rego='{request.RegistrationNumber}' or stock='{request.StockNumber}'. createIfMissing is not yet supported. TDL returned {vehicles.Count} vehicle(s): {sample}");
+                    return NotFound($"No TDL vehicle found matching rego='{request.RegistrationNumber}' or stock='{request.StockNumber}' and createIfMissing was false. TDL returned {vehicles.Count} vehicle(s): {sample}");
                 }
-
-                tdlVehicleId = match.Id;
             }
 
             var result = await _iAppraiseApi.StartDrive(ctx, bookingId, tdlVehicleId.Value);
@@ -100,7 +125,7 @@ namespace IAppraise.Controllers
             {
                 BookingId = result.Value.Id,
                 IAppraiseVehicleId = result.Value.Vehicle?.Id ?? tdlVehicleId.Value,
-                VehicleCreated = false,
+                VehicleCreated = vehicleWasCreated,
             });
         }
 
