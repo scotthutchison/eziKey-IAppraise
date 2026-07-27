@@ -46,6 +46,38 @@ namespace IAppraise.Controllers
             return Ok(result.Value);
         }
 
+        /// <summary>
+        /// Diagnostic: POST a vehicle straight to TDL, isolated from the pickup flow. Useful to
+        /// verify the token/dealership combination can actually create vehicles in TDL. Returns
+        /// the raw TDL response (or the TDL error body) so failures are diagnosable end-to-end.
+        /// </summary>
+        [HttpPost("create-vehicle")]
+        public async Task<ActionResult<object>> CreateVehicle([FromBody] CreateVehicleRequestDto request)
+        {
+            if (!TryGetContext(out var ctx, out var bad)) return bad!;
+            if (request == null) return BadRequest("Request body is required.");
+
+            var result = await _iAppraiseApi.CreateVehicle(ctx, request);
+            if (!result.Succeeded || result.Value == null)
+                return Problem(string.Join("; ", result.ErrorList ?? new() { "unknown" }), statusCode: 502);
+
+            return Ok(new
+            {
+                created = true,
+                tdlVehicleId = result.Value.Id,
+                registrationNumber = result.Value.RegistrationNumber,
+                stockNumber = result.Value.StockNumber,
+                make = result.Value.Make,
+                model = result.Value.Model,
+                modelYear = result.Value.ModelYear,
+                colour = result.Value.Colour,
+                odometer = result.Value.Odometer,
+                newUsed = result.Value.NewUsed,
+                isActive = result.Value.IsActive,
+                isManualEntry = result.Value.IsManualEntry,
+            });
+        }
+
         [HttpPost("EndDrive")]
         public async Task<ActionResult<VehicleDriveDto>> EndDrive(int driveId, int returningOdometer, string returningFuelLevel)
         {
