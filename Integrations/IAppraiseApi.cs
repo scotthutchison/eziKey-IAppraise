@@ -82,10 +82,24 @@ namespace Integrations
             var client = CreateClient(ctx);
             var url = $"{_baseUrl}/api/vehicle/create-ezikey-vehicle/";
 
-            var body = JsonSerializer.Serialize(request);
-            var content = new StringContent(body, System.Text.Encoding.UTF8, "application/json");
+            // TDL docs say Content-Type: application/json but the endpoint rejects JSON payloads
+            // with "dealership: This field is required" even when dealership is clearly present.
+            // Their other ezikey POST endpoints (StartDrive, EndDrive) accept multipart/form-data,
+            // so use that here too.
+            using var form = new MultipartFormDataContent();
+            form.Add(new StringContent(request.Dealership.ToString()), "dealership");
+            if (!string.IsNullOrWhiteSpace(request.Make)) form.Add(new StringContent(request.Make), "make");
+            if (!string.IsNullOrWhiteSpace(request.Model)) form.Add(new StringContent(request.Model), "model");
+            if (request.ModelYear.HasValue) form.Add(new StringContent(request.ModelYear.Value.ToString()), "model_year");
+            if (!string.IsNullOrWhiteSpace(request.NewUsed)) form.Add(new StringContent(request.NewUsed), "new_used");
+            if (!string.IsNullOrWhiteSpace(request.StockNumber)) form.Add(new StringContent(request.StockNumber), "stock_number");
+            if (!string.IsNullOrWhiteSpace(request.RegistrationNumber)) form.Add(new StringContent(request.RegistrationNumber), "registration_number");
+            if (!string.IsNullOrWhiteSpace(request.VinNumber)) form.Add(new StringContent(request.VinNumber), "vin_number");
+            if (!string.IsNullOrWhiteSpace(request.Colour)) form.Add(new StringContent(request.Colour), "colour");
+            if (request.Odometer.HasValue) form.Add(new StringContent(request.Odometer.Value.ToString()), "odometer");
+            if (!string.IsNullOrWhiteSpace(request.ExternalPicture)) form.Add(new StringContent(request.ExternalPicture), "external_picture");
 
-            var response = await client.PostAsync(url, content);
+            var response = await client.PostAsync(url, form);
 
             if (!response.IsSuccessStatusCode)
             {
