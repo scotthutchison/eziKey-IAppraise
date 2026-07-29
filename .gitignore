@@ -263,3 +263,6 @@ __pycache__/
 /Sentis
 /Bruce/Bruce.Web/Properties/ServiceDependencies/broos-dev - ReadOnly - FTP/profile.arm.json
 /GPSS.Web/.editorconfig
+
+# API request/response logs
+**/logs/

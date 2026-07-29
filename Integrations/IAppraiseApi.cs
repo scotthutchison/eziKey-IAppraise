@@ -1,6 +1,9 @@
+using System.Diagnostics;
 using Integrations.Core;
 using Integrations.Dtos;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using System.Text.Json;
 
 
@@ -23,13 +26,17 @@ namespace Integrations
 
     public class IAppraiseApi : IIAppraiseApi
     {
-        private readonly string _baseUrl;
+        private const int MaxLoggedBodyChars = 8 * 1024;
 
-        public IAppraiseApi(IConfiguration config)
+        private readonly string _baseUrl;
+        private readonly ILogger<IAppraiseApi> _log;
+
+        public IAppraiseApi(IConfiguration config, ILogger<IAppraiseApi>? log = null)
         {
             // Only the TDL base URL is server-side config now — the dealership id and API token
             // come from the caller so this API can be shared across dealerships.
             _baseUrl = (config["IAppraise:BaseUrl"] ?? "https://www.testdriveloan.com.au").TrimEnd('/');
+            _log = log ?? NullLogger<IAppraiseApi>.Instance;
         }
 
         private HttpClient CreateClient(TdlContext ctx)
@@ -44,15 +51,17 @@ namespace Integrations
             var client = CreateClient(ctx);
             var url = $"{_baseUrl}/api/vehicle/ezikey-list-all-vehicles-at-site/?dealership={ctx.DealershipId}";
 
+            var sw = Stopwatch.StartNew();
+            _log.LogInformation("OUT GET {Url} (dealership={Dealership})", url, ctx.DealershipId);
+
             var response = await client.SendAsync(new HttpRequestMessage(HttpMethod.Get, url));
+            var body = await response.Content.ReadAsStringAsync();
+            sw.Stop();
+            LogResponse("GetAllVehicles", response, body, sw.ElapsedMilliseconds);
 
             if (response.IsSuccessStatusCode)
-            {
-                var json = await response.Content.ReadAsStringAsync();
-                return new Result<VehicleResponseDto>(JsonSerializer.Deserialize<VehicleResponseDto>(json)!);
-            }
+                return new Result<VehicleResponseDto>(JsonSerializer.Deserialize<VehicleResponseDto>(body)!);
 
-            var body = await response.Content.ReadAsStringAsync();
             return new Result<VehicleResponseDto>($"TDL GetAllVehicles (dealership={ctx.DealershipId}) returned {(int)response.StatusCode} {response.ReasonPhrase}: {body}");
         }
 
@@ -61,15 +70,17 @@ namespace Integrations
             var client = CreateClient(ctx);
             var url = $"{_baseUrl}/api/vehicle-event/ezikey-get-all-unstarted-vehicle-events/?dealership={ctx.DealershipId}";
 
+            var sw = Stopwatch.StartNew();
+            _log.LogInformation("OUT GET {Url} (dealership={Dealership})", url, ctx.DealershipId);
+
             var response = await client.SendAsync(new HttpRequestMessage(HttpMethod.Get, url));
+            var body = await response.Content.ReadAsStringAsync();
+            sw.Stop();
+            LogResponse("GetAllUnstartedVehicleEvents", response, body, sw.ElapsedMilliseconds);
 
             if (response.IsSuccessStatusCode)
-            {
-                var json = await response.Content.ReadAsStringAsync();
-                return new Result<VehicleEventsResponse>(JsonSerializer.Deserialize<VehicleEventsResponse>(json)!);
-            }
+                return new Result<VehicleEventsResponse>(JsonSerializer.Deserialize<VehicleEventsResponse>(body)!);
 
-            var body = await response.Content.ReadAsStringAsync();
             return new Result<VehicleEventsResponse>($"TDL GetAllUnstartedVehicleEvents (dealership={ctx.DealershipId}) returned {(int)response.StatusCode} {response.ReasonPhrase}: {body}");
         }
 
@@ -87,28 +98,35 @@ namespace Integrations
             // Their other ezikey POST endpoints (StartDrive, EndDrive) accept multipart/form-data,
             // so use that here too.
             using var form = new MultipartFormDataContent();
-            form.Add(new StringContent(request.Dealership.ToString()), "dealership");
-            if (!string.IsNullOrWhiteSpace(request.Make)) form.Add(new StringContent(request.Make), "make");
-            if (!string.IsNullOrWhiteSpace(request.Model)) form.Add(new StringContent(request.Model), "model");
-            if (request.ModelYear.HasValue) form.Add(new StringContent(request.ModelYear.Value.ToString()), "model_year");
-            if (!string.IsNullOrWhiteSpace(request.NewUsed)) form.Add(new StringContent(request.NewUsed), "new_used");
-            if (!string.IsNullOrWhiteSpace(request.StockNumber)) form.Add(new StringContent(request.StockNumber), "stock_number");
-            if (!string.IsNullOrWhiteSpace(request.RegistrationNumber)) form.Add(new StringContent(request.RegistrationNumber), "registration_number");
-            if (!string.IsNullOrWhiteSpace(request.VinNumber)) form.Add(new StringContent(request.VinNumber), "vin_number");
-            if (!string.IsNullOrWhiteSpace(request.Colour)) form.Add(new StringContent(request.Colour), "colour");
-            if (request.Odometer.HasValue) form.Add(new StringContent(request.Odometer.Value.ToString()), "odometer");
-            if (!string.IsNullOrWhiteSpace(request.ExternalPicture)) form.Add(new StringContent(request.ExternalPicture), "external_picture");
+            void AddPart(string name, string? value)
+            {
+                if (!string.IsNullOrWhiteSpace(value)) form.Add(new StringContent(value), name);
+            }
+            AddPart("dealership", request.Dealership.ToString());
+            AddPart("make", request.Make);
+            AddPart("model", request.Model);
+            if (request.ModelYear.HasValue) AddPart("model_year", request.ModelYear.Value.ToString());
+            AddPart("new_used", request.NewUsed);
+            AddPart("stock_number", request.StockNumber);
+            AddPart("registration_number", request.RegistrationNumber);
+            AddPart("vin_number", request.VinNumber);
+            AddPart("colour", request.Colour);
+            if (request.Odometer.HasValue) AddPart("odometer", request.Odometer.Value.ToString());
+            AddPart("external_picture", request.ExternalPicture);
+
+            var sw = Stopwatch.StartNew();
+            var reqSummary = JsonSerializer.Serialize(request);
+            _log.LogInformation("OUT POST {Url} (dealership={Dealership}) body: {ReqBody}", url, ctx.DealershipId, reqSummary);
 
             var response = await client.PostAsync(url, form);
+            var body = await response.Content.ReadAsStringAsync();
+            sw.Stop();
+            LogResponse("CreateVehicle", response, body, sw.ElapsedMilliseconds);
 
             if (!response.IsSuccessStatusCode)
-            {
-                var errBody = await response.Content.ReadAsStringAsync();
-                return new Result<VehicleDto>($"TDL CreateVehicle (dealership={ctx.DealershipId}, rego='{request.RegistrationNumber}', stock='{request.StockNumber}') returned {(int)response.StatusCode} {response.ReasonPhrase}: {errBody}");
-            }
+                return new Result<VehicleDto>($"TDL CreateVehicle (dealership={ctx.DealershipId}, rego='{request.RegistrationNumber}', stock='{request.StockNumber}') returned {(int)response.StatusCode} {response.ReasonPhrase}: {body}");
 
-            var json = await response.Content.ReadAsStringAsync();
-            var dto = JsonSerializer.Deserialize<VehicleDto>(json);
+            var dto = JsonSerializer.Deserialize<VehicleDto>(body);
             return new Result<VehicleDto>(dto!);
         }
 
@@ -120,17 +138,19 @@ namespace Integrations
             using var form = new MultipartFormDataContent();
             form.Add(new StringContent(vehicleId.ToString()), "vehicle");
 
+            var sw = Stopwatch.StartNew();
+            _log.LogInformation("OUT POST {Url} (dealership={Dealership}) form: vehicle={VehicleId}", url, ctx.DealershipId, vehicleId);
+
             using var req = new HttpRequestMessage(HttpMethod.Post, url) { Content = form };
             var response = await client.SendAsync(req);
+            var body = await response.Content.ReadAsStringAsync();
+            sw.Stop();
+            LogResponse("StartDrive", response, body, sw.ElapsedMilliseconds);
 
             if (!response.IsSuccessStatusCode)
-            {
-                var body = await response.Content.ReadAsStringAsync();
                 return new Result<VehicleDriveDto>($"TDL StartDrive({driveId}, vehicle={vehicleId}) returned {(int)response.StatusCode} {response.ReasonPhrase}: {body}");
-            }
 
-            var json = await response.Content.ReadAsStringAsync();
-            var dto = JsonSerializer.Deserialize<VehicleDriveDto>(json);
+            var dto = JsonSerializer.Deserialize<VehicleDriveDto>(body);
             return new Result<VehicleDriveDto>(dto!);
         }
 
@@ -143,18 +163,33 @@ namespace Integrations
             form.Add(new StringContent(returningOdometer.ToString()), "returning_odometer");
             form.Add(new StringContent(returningFuelLevel), "returning_fuel_level");
 
+            var sw = Stopwatch.StartNew();
+            _log.LogInformation("OUT POST {Url} (dealership={Dealership}) form: returning_odometer={Odo} returning_fuel_level={Fuel}",
+                url, ctx.DealershipId, returningOdometer, returningFuelLevel);
+
             using var req = new HttpRequestMessage(HttpMethod.Post, url) { Content = form };
             var response = await client.SendAsync(req);
+            var body = await response.Content.ReadAsStringAsync();
+            sw.Stop();
+            LogResponse("EndDrive", response, body, sw.ElapsedMilliseconds);
 
             if (!response.IsSuccessStatusCode)
-            {
-                var body = await response.Content.ReadAsStringAsync();
                 return new Result<VehicleDriveDto>($"TDL EndDrive({driveId}) returned {(int)response.StatusCode} {response.ReasonPhrase}: {body}");
-            }
 
-            var json = await response.Content.ReadAsStringAsync();
-            var dto = JsonSerializer.Deserialize<VehicleDriveDto>(json);
+            var dto = JsonSerializer.Deserialize<VehicleDriveDto>(body);
             return new Result<VehicleDriveDto>(dto!);
+        }
+
+        private void LogResponse(string op, HttpResponseMessage response, string body, long elapsedMs)
+        {
+            var status = (int)response.StatusCode;
+            var truncated = body.Length > MaxLoggedBodyChars
+                ? body.Substring(0, MaxLoggedBodyChars) + $" …[truncated at {MaxLoggedBodyChars} chars]"
+                : body;
+            var level = status >= 500 ? LogLevel.Error
+                      : status >= 400 ? LogLevel.Warning
+                      : LogLevel.Information;
+            _log.Log(level, "OUT {Op} <- {Status} in {Elapsed}ms body: {ResBody}", op, status, elapsedMs, truncated);
         }
     }
 }
