@@ -85,18 +85,24 @@ namespace IAppraise
 
         private static async Task<string> ReadRequestBodyAsync(HttpRequest request)
         {
-            if (!request.Body.CanRead) return "(unreadable)";
+            if (request.ContentLength is 0 or null && !request.Body.CanRead) return "";
             request.EnableBuffering();
-            request.Body.Seek(0, SeekOrigin.Begin);
 
-            using var reader = new StreamReader(request.Body, Encoding.UTF8, detectEncodingFromByteOrderMarks: false, bufferSize: 4096, leaveOpen: true);
-            var buffer = new char[MaxBodyBytesLogged];
-            var read = await reader.ReadAsync(buffer, 0, buffer.Length);
-            request.Body.Seek(0, SeekOrigin.Begin);
+            // Copy the whole request stream into memory. EnableBuffering allows this to be
+            // re-read by MVC after we reset Position. Using CopyToAsync (rather than a
+            // StreamReader) avoids the reader's own internal buffering — a StreamReader can
+            // buffer past what we asked for and leave the request unreadable downstream, which
+            // manifests as "The input does not contain any JSON tokens" for JSON POSTs.
+            using var ms = new MemoryStream();
+            await request.Body.CopyToAsync(ms);
+            request.Body.Position = 0;
 
-            var body = new string(buffer, 0, read);
-            var truncated = reader.Peek() >= 0;
-            return truncated ? body + $" …[truncated at {MaxBodyBytesLogged} chars]" : body;
+            var bytes = ms.ToArray();
+            var toShow = Math.Min(bytes.Length, MaxBodyBytesLogged);
+            var body = Encoding.UTF8.GetString(bytes, 0, toShow);
+            return bytes.Length > MaxBodyBytesLogged
+                ? body + $" …[truncated at {MaxBodyBytesLogged} bytes]"
+                : body;
         }
 
         private static string ReadWithCap(MemoryStream stream)
