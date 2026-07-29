@@ -6,11 +6,23 @@ using Serilog;
 var builder = WebApplication.CreateBuilder(args);
 
 // Application Insights auto-captures inbound HTTP requests, outbound HttpClient
-// dependencies, and unhandled exceptions. It reads its connection string from either
-// APPLICATIONINSIGHTS_CONNECTION_STRING (env var / App Setting) or the
-// ApplicationInsights:ConnectionString section in appsettings. If neither is set the
-// telemetry pipeline is a no-op — safe for local dev.
-builder.Services.AddApplicationInsightsTelemetry();
+// dependencies, and unhandled exceptions when a connection string is set (either
+// APPLICATIONINSIGHTS_CONNECTION_STRING env var / App Setting, or the
+// ApplicationInsights:ConnectionString appsettings key). It is intentionally NOT wired
+// up when unset — current versions of AddApplicationInsightsTelemetry crash the host at
+// startup if no connection string is present, so we guard on it here to keep local dev
+// and any deployment that doesn't want AI running cleanly.
+var appInsightsConnectionString =
+    builder.Configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"]
+    ?? builder.Configuration["ApplicationInsights:ConnectionString"];
+
+if (!string.IsNullOrWhiteSpace(appInsightsConnectionString))
+{
+    builder.Services.AddApplicationInsightsTelemetry(options =>
+    {
+        options.ConnectionString = appInsightsConnectionString;
+    });
+}
 
 // Serilog for our own request/response body logs. Also mirrors Serilog events into
 // Application Insights (as trace telemetry) when the AI connection string is present.
@@ -20,15 +32,11 @@ builder.Host.UseSerilog((context, services, configuration) =>
         .ReadFrom.Configuration(context.Configuration)
         .ReadFrom.Services(services);
 
-    var aiConnectionString =
-        context.Configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"]
-        ?? context.Configuration["ApplicationInsights:ConnectionString"];
-
-    if (!string.IsNullOrWhiteSpace(aiConnectionString))
+    // Mirror Serilog events into AI as trace telemetry, but only if AI is actually
+    // registered above — otherwise TelemetryConfiguration isn't in the container.
+    if (services.GetService<TelemetryConfiguration>() is { } tc)
     {
-        configuration.WriteTo.ApplicationInsights(
-            services.GetRequiredService<TelemetryConfiguration>(),
-            TelemetryConverter.Traces);
+        configuration.WriteTo.ApplicationInsights(tc, TelemetryConverter.Traces);
     }
 });
 
