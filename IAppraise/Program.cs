@@ -1,15 +1,35 @@
 using IAppraise;
 using Integrations;
+using Microsoft.ApplicationInsights.Extensibility;
 using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Serilog: pull config from appsettings (Serilog section). Enrich every log line with the
-// request's TraceIdentifier so an inbound touchscreen call and the outbound TDL calls it
-// triggers can be correlated in the log by searching for the same trace id.
+// Application Insights auto-captures inbound HTTP requests, outbound HttpClient
+// dependencies, and unhandled exceptions. It reads its connection string from either
+// APPLICATIONINSIGHTS_CONNECTION_STRING (env var / App Setting) or the
+// ApplicationInsights:ConnectionString section in appsettings. If neither is set the
+// telemetry pipeline is a no-op — safe for local dev.
+builder.Services.AddApplicationInsightsTelemetry();
+
+// Serilog for our own request/response body logs. Also mirrors Serilog events into
+// Application Insights (as trace telemetry) when the AI connection string is present.
 builder.Host.UseSerilog((context, services, configuration) =>
 {
-    configuration.ReadFrom.Configuration(context.Configuration);
+    configuration
+        .ReadFrom.Configuration(context.Configuration)
+        .ReadFrom.Services(services);
+
+    var aiConnectionString =
+        context.Configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"]
+        ?? context.Configuration["ApplicationInsights:ConnectionString"];
+
+    if (!string.IsNullOrWhiteSpace(aiConnectionString))
+    {
+        configuration.WriteTo.ApplicationInsights(
+            services.GetRequiredService<TelemetryConfiguration>(),
+            TelemetryConverter.Traces);
+    }
 });
 
 // Add services to the container.
