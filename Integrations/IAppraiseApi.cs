@@ -157,7 +157,10 @@ namespace Integrations
         public async Task<Result<VehicleDriveDto>> EndDrive(TdlContext ctx, int driveId, int returningOdometer, string returningFuelLevel)
         {
             var client = CreateClient(ctx);
-            var url = $"{_baseUrl}/api/vehicle-event/{driveId}/ezikey-end-drive/";
+            // TDL's endpoint is "ezikey-return-drive" (per the integration spec) — NOT
+            // "ezikey-end-drive". Hitting the wrong path gets an HTML 404 from TDL, which
+            // reads as "the drive can't be ended" from the touchscreen's perspective.
+            var url = $"{_baseUrl}/api/vehicle-event/{driveId}/ezikey-return-drive/";
 
             using var form = new MultipartFormDataContent();
             form.Add(new StringContent(returningOdometer.ToString()), "returning_odometer");
