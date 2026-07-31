@@ -13,13 +13,11 @@ namespace Integrations
     public interface IIAppraiseApi
     {
         Task<Result<VehicleResponseDto>> GetAllVehicles(
-            int dealershipId,
             string? registrationNumber = null,
             string? stockNumber = null,
             CancellationToken ct = default);
 
         Task<Result<VehicleEventsResponse>> GetAllUnstartedVehicleEvents(
-            int dealershipId,
             CancellationToken ct = default);
 
         Task<Result<VehicleDriveDto>> StartDrive(
@@ -45,24 +43,26 @@ namespace Integrations
         private readonly IHttpClientFactory _httpClientFactory;
         private readonly IIAppraiseAuthenticator _auth;
         private readonly ILogger<IAppraiseApi> _logger;
+        private readonly IAppraiseOptions _options;
 
         public IAppraiseApi(
             IHttpClientFactory httpClientFactory,
             IIAppraiseAuthenticator auth,
-            ILogger<IAppraiseApi> logger)
+            ILogger<IAppraiseApi> logger,
+            IOptions<IAppraiseOptions> options)
         {
             _httpClientFactory = httpClientFactory;
             _auth = auth;
             _logger = logger;
+            _options = options.Value;
         }
 
         public Task<Result<VehicleResponseDto>> GetAllVehicles(
-            int dealershipId,
             string? registrationNumber = null,
             string? stockNumber = null,
             CancellationToken ct = default)
         {
-            var query = new List<string> { $"dealership={dealershipId}" };
+            var query = new List<string> { $"dealership={_options.DefaultDealershipId}" };
             if (!string.IsNullOrWhiteSpace(registrationNumber))
                 query.Add($"registration_number={Uri.EscapeDataString(registrationNumber)}");
             if (!string.IsNullOrWhiteSpace(stockNumber))
@@ -73,10 +73,9 @@ namespace Integrations
         }
 
         public Task<Result<VehicleEventsResponse>> GetAllUnstartedVehicleEvents(
-            int dealershipId,
             CancellationToken ct = default)
         {
-            var url = $"vehicle-event/ezikey-get-all-unstarted-vehicle-events/?dealership={dealershipId}";
+            var url = $"vehicle-event/ezikey-get-all-unstarted-vehicle-events/?dealership={_options.DefaultDealershipId}";
             return SendAsync<VehicleEventsResponse>(HttpMethod.Get, url, contentFactory: null, ct);
         }
 

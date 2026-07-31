@@ -35,7 +35,7 @@ namespace IAppraise.Services
             var dealershipId = _options.DefaultDealershipId;
             _logger.LogInformation("Fetching open bookings for dealership {DealershipId}", dealershipId);
 
-            var result = await _api.GetAllUnstartedVehicleEvents(dealershipId, ct);
+            var result = await _api.GetAllUnstartedVehicleEvents(ct);
             if (!result.Succeeded)
             {
                 return new Result<List<BookingSummaryDto>>(result.ErrorList.ToArray());
@@ -65,7 +65,7 @@ namespace IAppraise.Services
         {
             var dealershipId = _options.DefaultDealershipId;
 
-            var vehicleResult = await ResolveVehicleIdAsync(dealershipId, request, ct);
+            var vehicleResult = await ResolveVehicleIdAsync(request, ct);
             if (!vehicleResult.Succeeded)
             {
                 return new Result<PickupResponseDto>(vehicleResult.ErrorList.ToArray());
@@ -107,7 +107,7 @@ namespace IAppraise.Services
             });
         }
 
-        private async Task<Result<VehicleResolution>> ResolveVehicleIdAsync(int dealershipId, PickupRequestDto request, CancellationToken ct)
+        private async Task<Result<VehicleResolution>> ResolveVehicleIdAsync(PickupRequestDto request, CancellationToken ct)
         {
             if (request.IAppraiseVehicleId.HasValue && request.IAppraiseVehicleId.Value > 0)
             {
@@ -116,7 +116,7 @@ namespace IAppraise.Services
 
             if (!string.IsNullOrWhiteSpace(request.RegistrationNumber))
             {
-                var lookup = await _api.GetAllVehicles(dealershipId, registrationNumber: request.RegistrationNumber, ct: ct);
+                var lookup = await _api.GetAllVehicles(registrationNumber: request.RegistrationNumber, ct: ct);
                 if (!lookup.Succeeded)
                 {
                     return new Result<VehicleResolution>(lookup.ErrorList.ToArray());
@@ -131,7 +131,7 @@ namespace IAppraise.Services
 
             if (!string.IsNullOrWhiteSpace(request.StockNumber))
             {
-                var lookup = await _api.GetAllVehicles(dealershipId, stockNumber: request.StockNumber, ct: ct);
+                var lookup = await _api.GetAllVehicles(stockNumber: request.StockNumber, ct: ct);
                 if (!lookup.Succeeded)
                 {
                     return new Result<VehicleResolution>(lookup.ErrorList.ToArray());
@@ -160,11 +160,11 @@ namespace IAppraise.Services
 
             _logger.LogInformation(
                 "Vehicle {Rego}/{Stock} not found in iAppraise dealership {DealershipId}; creating.",
-                request.RegistrationNumber, request.StockNumber, dealershipId);
+                request.RegistrationNumber, request.StockNumber, _options.DefaultDealershipId);
 
             var created = await _api.CreateVehicle(new CreateVehicleRequestDto
             {
-                Dealership = dealershipId,
+                Dealership = _options.DefaultDealershipId,
                 Make = request.Make,
                 Model = request.Model,
                 ModelYear = request.ModelYear,

@@ -23,7 +23,7 @@ namespace IAppraise.Controllers
                 return Problem(string.Join("; ", result.ErrorList), statusCode: 502);
 
             var events = result.Value?.VehicleEvents ?? new();
-            var bookings = events.Select(e => new BookingSummaryDto
+            var bookings = events.Where(e => !e.DateTimeStarted.HasValue).Select(e => new BookingSummaryDto
             {
                 BookingId = e.Id,
                 CustomerFirstName = e.Customer?.FirstName,

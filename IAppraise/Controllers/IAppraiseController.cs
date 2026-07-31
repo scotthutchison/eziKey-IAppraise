@@ -37,7 +37,7 @@ namespace IAppraise.Controllers
         }
 
         [HttpPost("EndDrive")]
-        public async Task<VehicleDriveDto> EndDrive(int driveId, int returningOdometer, string returningFuelLevel)
+        public async Task<VehicleDriveDto> EndDrive(int driveId, int? returningOdometer, string returningFuelLevel)
         {
             var result = await _iAppraiseApi.EndDrive(driveId, returningOdometer, returningFuelLevel);
             return result.Value;
