@@ -1,59 +1,70 @@
-using IAppraise.Middleware;
-using IAppraise.Services;
+using IAppraise;
 using Integrations;
-using Integrations.Auth;
-using Integrations.Configuration;
-using Microsoft.Extensions.Options;
-using System.Net.Http.Headers;
+using Microsoft.ApplicationInsights.Extensibility;
+using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Application Insights auto-captures inbound HTTP requests, outbound HttpClient
+// dependencies, and unhandled exceptions when a connection string is set (either
+// APPLICATIONINSIGHTS_CONNECTION_STRING env var / App Setting, or the
+// ApplicationInsights:ConnectionString appsettings key). It is intentionally NOT wired
+// up when unset — current versions of AddApplicationInsightsTelemetry crash the host at
+// startup if no connection string is present, so we guard on it here to keep local dev
+// and any deployment that doesn't want AI running cleanly.
+var appInsightsConnectionString =
+    builder.Configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"]
+    ?? builder.Configuration["ApplicationInsights:ConnectionString"];
+
+if (!string.IsNullOrWhiteSpace(appInsightsConnectionString))
+{
+    builder.Services.AddApplicationInsightsTelemetry(options =>
+    {
+        options.ConnectionString = appInsightsConnectionString;
+    });
+}
+
+// Serilog for our own request/response body logs. Also mirrors Serilog events into
+// Application Insights (as trace telemetry) when the AI connection string is present.
+builder.Host.UseSerilog((context, services, configuration) =>
+{
+    configuration
+        .ReadFrom.Configuration(context.Configuration)
+        .ReadFrom.Services(services);
+
+    // Mirror Serilog events into AI as trace telemetry, but only if AI is actually
+    // registered above — otherwise TelemetryConfiguration isn't in the container.
+    if (services.GetService<TelemetryConfiguration>() is { } tc)
+    {
+        configuration.WriteTo.ApplicationInsights(tc, TelemetryConverter.Traces);
+    }
+});
+
+// Add services to the container.
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
-builder.Services.Configure<IAppraiseOptions>(
-    builder.Configuration.GetSection(IAppraiseOptions.SectionName));
-builder.Services.Configure<ApiKeyOptions>(
-    builder.Configuration.GetSection(ApiKeyOptions.SectionName));
-
-builder.Services.AddHttpClient(IAppraiseAuthenticator.HttpClientName, (sp, http) =>
-{
-    var opts = sp.GetRequiredService<IOptions<IAppraiseOptions>>().Value;
-    http.BaseAddress = new Uri(opts.BaseUrl);
-    http.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-});
-
-builder.Services.AddHttpClient(IAppraiseApi.HttpClientName, (sp, http) =>
-{
-    var opts = sp.GetRequiredService<IOptions<IAppraiseOptions>>().Value;
-    http.BaseAddress = new Uri(opts.BaseUrl);
-    http.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-});
-
-builder.Services.AddSingleton<IIAppraiseAuthenticator, IAppraiseAuthenticator>();
+builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<IIAppraiseApi, IAppraiseApi>();
-builder.Services.AddScoped<IBookingService, BookingService>();
 
 var app = builder.Build();
 
 app.UseSwagger();
+
 app.UseSwaggerUI(options =>
 {
-    options.SwaggerEndpoint("/swagger/v1/swagger.json", "eziKey iAppraise Facade v1");
+    options.SwaggerEndpoint("/swagger/v1/swagger.json", "Web API V1");
     options.RoutePrefix = "swagger";
-    //else
-    //  options.RoutePrefix = string.Empty;
-}
-);
+});
+
 if (!app.Environment.IsDevelopment())
 {
     app.UseHttpsRedirection();
 }
 
-app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
-
-app.UseMiddleware<ApiKeyMiddleware>();
+// Body-level request/response logging — must run before auth so we log 401s too.
+app.UseMiddleware<RequestResponseLoggingMiddleware>();
 
 app.UseAuthorization();
 

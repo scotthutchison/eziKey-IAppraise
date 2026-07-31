@@ -2,6 +2,9 @@ using System.Text.Json.Serialization;
 
 namespace Integrations.Dtos
 {
+    /// <summary>
+    /// Body for POST /api/vehicle/create-ezikey-vehicle/ — only <see cref="Dealership"/> is required.
+    /// </summary>
     public class CreateVehicleRequestDto
     {
         [JsonPropertyName("dealership")]
@@ -16,6 +19,7 @@ namespace Integrations.Dtos
         [JsonPropertyName("model_year")]
         public int? ModelYear { get; set; }
 
+        // TDL expects "New", "Used" or "Demo".
         [JsonPropertyName("new_used")]
         public string? NewUsed { get; set; }
 

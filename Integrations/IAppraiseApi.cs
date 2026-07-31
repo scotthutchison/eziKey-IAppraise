@@ -1,203 +1,198 @@
-using Integrations.Auth;
-using Integrations.Configuration;
+using System.Diagnostics;
 using Integrations.Core;
 using Integrations.Dtos;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
-using System.Net;
-using System.Net.Http.Json;
+using Microsoft.Extensions.Logging.Abstractions;
 using System.Text.Json;
+
 
 namespace Integrations
 {
     public interface IIAppraiseApi
     {
-        Task<Result<VehicleResponseDto>> GetAllVehicles(
-            string? registrationNumber = null,
-            string? stockNumber = null,
-            CancellationToken ct = default);
-
-        Task<Result<VehicleEventsResponse>> GetAllUnstartedVehicleEvents(
-            CancellationToken ct = default);
-
-        Task<Result<VehicleDriveDto>> StartDrive(
-            int driveId,
-            int vehicleId,
-            CancellationToken ct = default);
-
-        Task<Result<VehicleDriveDto>> EndDrive(
-            int driveId,
-            int? returningOdometer,
-            string returningFuelLevel,
-            CancellationToken ct = default);
-
-        Task<Result<VehicleDto>> CreateVehicle(
-            CreateVehicleRequestDto request,
-            CancellationToken ct = default);
+        Task<Result<VehicleResponseDto>> GetAllVehicles(TdlContext ctx);
+        Task<Result<VehicleEventsResponse>> GetAllUnstartedVehicleEvents(TdlContext ctx);
+        Task<Result<VehicleDto>> CreateVehicle(TdlContext ctx, CreateVehicleRequestDto request);
+        Task<Result<VehicleDriveDto>> StartDrive(TdlContext ctx, int driveId, int vehicleId);
+        Task<Result<VehicleDriveDto>> EndDrive(TdlContext ctx, int driveId, int returningOdometer, string returningFuelLevel);
     }
+
+    /// <summary>
+    /// Per-request TDL tenant context. Passed in by the caller (touchscreen) so this API can
+    /// serve multiple dealerships with a single deployment.
+    /// </summary>
+    public sealed record TdlContext(int DealershipId, string Token);
 
     public class IAppraiseApi : IIAppraiseApi
     {
-        public const string HttpClientName = "IAppraiseApi";
+        private const int MaxLoggedBodyChars = 8 * 1024;
 
-        private readonly IHttpClientFactory _httpClientFactory;
-        private readonly IIAppraiseAuthenticator _auth;
-        private readonly ILogger<IAppraiseApi> _logger;
-        private readonly IAppraiseOptions _options;
+        private readonly string _baseUrl;
+        private readonly ILogger<IAppraiseApi> _log;
 
-        public IAppraiseApi(
-            IHttpClientFactory httpClientFactory,
-            IIAppraiseAuthenticator auth,
-            ILogger<IAppraiseApi> logger,
-            IOptions<IAppraiseOptions> options)
+        public IAppraiseApi(IConfiguration config, ILogger<IAppraiseApi>? log = null)
         {
-            _httpClientFactory = httpClientFactory;
-            _auth = auth;
-            _logger = logger;
-            _options = options.Value;
+            // Only the TDL base URL is server-side config now — the dealership id and API token
+            // come from the caller so this API can be shared across dealerships.
+            _baseUrl = (config["IAppraise:BaseUrl"] ?? "https://www.testdriveloan.com.au").TrimEnd('/');
+            _log = log ?? NullLogger<IAppraiseApi>.Instance;
         }
 
-        public Task<Result<VehicleResponseDto>> GetAllVehicles(
-            string? registrationNumber = null,
-            string? stockNumber = null,
-            CancellationToken ct = default)
+        private HttpClient CreateClient(TdlContext ctx)
         {
-            var query = new List<string> { $"dealership={_options.DefaultDealershipId}" };
-            if (!string.IsNullOrWhiteSpace(registrationNumber))
-                query.Add($"registration_number={Uri.EscapeDataString(registrationNumber)}");
-            if (!string.IsNullOrWhiteSpace(stockNumber))
-                query.Add($"stock_number={Uri.EscapeDataString(stockNumber)}");
-
-            var url = $"vehicle/ezikey-list-all-vehicles-at-site/?{string.Join("&", query)}";
-            return SendAsync<VehicleResponseDto>(HttpMethod.Get, url, contentFactory: null, ct);
+            var client = new HttpClient();
+            client.DefaultRequestHeaders.Add("Authorization", ctx.Token);
+            return client;
         }
 
-        public Task<Result<VehicleEventsResponse>> GetAllUnstartedVehicleEvents(
-            CancellationToken ct = default)
+        public async Task<Result<VehicleResponseDto>> GetAllVehicles(TdlContext ctx)
         {
-            var url = $"vehicle-event/ezikey-get-all-unstarted-vehicle-events/?dealership={_options.DefaultDealershipId}";
-            return SendAsync<VehicleEventsResponse>(HttpMethod.Get, url, contentFactory: null, ct);
+            var client = CreateClient(ctx);
+            var url = $"{_baseUrl}/api/vehicle/ezikey-list-all-vehicles-at-site/?dealership={ctx.DealershipId}";
+
+            var sw = Stopwatch.StartNew();
+            _log.LogInformation("OUT GET {Url} (dealership={Dealership})", url, ctx.DealershipId);
+
+            var response = await client.SendAsync(new HttpRequestMessage(HttpMethod.Get, url));
+            var body = await response.Content.ReadAsStringAsync();
+            sw.Stop();
+            LogResponse("GetAllVehicles", response, body, sw.ElapsedMilliseconds);
+
+            if (response.IsSuccessStatusCode)
+                return new Result<VehicleResponseDto>(JsonSerializer.Deserialize<VehicleResponseDto>(body)!);
+
+            return new Result<VehicleResponseDto>($"TDL GetAllVehicles (dealership={ctx.DealershipId}) returned {(int)response.StatusCode} {response.ReasonPhrase}: {body}");
         }
 
-        public Task<Result<VehicleDriveDto>> StartDrive(
-            int driveId,
-            int vehicleId,
-            CancellationToken ct = default)
+        public async Task<Result<VehicleEventsResponse>> GetAllUnstartedVehicleEvents(TdlContext ctx)
         {
-            var url = $"vehicle-event/{driveId}/ezikey-start-drive/";
+            var client = CreateClient(ctx);
+            var url = $"{_baseUrl}/api/vehicle-event/ezikey-get-all-unstarted-vehicle-events/?dealership={ctx.DealershipId}";
 
-            HttpContent Factory()
+            var sw = Stopwatch.StartNew();
+            _log.LogInformation("OUT GET {Url} (dealership={Dealership})", url, ctx.DealershipId);
+
+            var response = await client.SendAsync(new HttpRequestMessage(HttpMethod.Get, url));
+            var body = await response.Content.ReadAsStringAsync();
+            sw.Stop();
+            LogResponse("GetAllUnstartedVehicleEvents", response, body, sw.ElapsedMilliseconds);
+
+            if (response.IsSuccessStatusCode)
+                return new Result<VehicleEventsResponse>(JsonSerializer.Deserialize<VehicleEventsResponse>(body)!);
+
+            return new Result<VehicleEventsResponse>($"TDL GetAllUnstartedVehicleEvents (dealership={ctx.DealershipId}) returned {(int)response.StatusCode} {response.ReasonPhrase}: {body}");
+        }
+
+        public async Task<Result<VehicleDto>> CreateVehicle(TdlContext ctx, CreateVehicleRequestDto request)
+        {
+            // Force the dealership on the request to match the caller's context — the API is
+            // multi-tenant and mustn't let one dealer create vehicles under another.
+            request.Dealership = ctx.DealershipId;
+
+            var client = CreateClient(ctx);
+            var url = $"{_baseUrl}/api/vehicle/create-ezikey-vehicle/";
+
+            // TDL docs say Content-Type: application/json but the endpoint rejects JSON payloads
+            // with "dealership: This field is required" even when dealership is clearly present.
+            // Their other ezikey POST endpoints (StartDrive, EndDrive) accept multipart/form-data,
+            // so use that here too.
+            using var form = new MultipartFormDataContent();
+            void AddPart(string name, string? value)
             {
-                var form = new MultipartFormDataContent();
-                form.Add(new StringContent(vehicleId.ToString()), "vehicle");
-                return form;
+                if (!string.IsNullOrWhiteSpace(value)) form.Add(new StringContent(value), name);
             }
+            AddPart("dealership", request.Dealership.ToString());
+            AddPart("make", request.Make);
+            AddPart("model", request.Model);
+            if (request.ModelYear.HasValue) AddPart("model_year", request.ModelYear.Value.ToString());
+            AddPart("new_used", request.NewUsed);
+            AddPart("stock_number", request.StockNumber);
+            AddPart("registration_number", request.RegistrationNumber);
+            AddPart("vin_number", request.VinNumber);
+            AddPart("colour", request.Colour);
+            if (request.Odometer.HasValue) AddPart("odometer", request.Odometer.Value.ToString());
+            AddPart("external_picture", request.ExternalPicture);
 
-            return SendAsync<VehicleDriveDto>(HttpMethod.Post, url, Factory, ct);
-        }
+            var sw = Stopwatch.StartNew();
+            var reqSummary = JsonSerializer.Serialize(request);
+            _log.LogInformation("OUT POST {Url} (dealership={Dealership}) body: {ReqBody}", url, ctx.DealershipId, reqSummary);
 
-        public Task<Result<VehicleDriveDto>> EndDrive(
-            int driveId,
-            int? returningOdometer,
-            string returningFuelLevel,
-            CancellationToken ct = default)
-        {
-            var url = $"vehicle-event/{driveId}/ezikey-return-drive/";
-
-            HttpContent Factory()
-            {
-                var form = new MultipartFormDataContent();
-                if (returningOdometer.HasValue)
-                    form.Add(new StringContent(returningOdometer.Value.ToString()), "returning_odometer");
-                form.Add(new StringContent(returningFuelLevel ?? string.Empty), "returning_fuel_level");
-                return form;
-            }
-
-            return SendAsync<VehicleDriveDto>(HttpMethod.Post, url, Factory, ct);
-        }
-
-        public Task<Result<VehicleDto>> CreateVehicle(
-            CreateVehicleRequestDto request,
-            CancellationToken ct = default)
-        {
-            var url = "vehicle/create-ezikey-vehicle/";
-            HttpContent Factory() => JsonContent.Create(request);
-            return SendAsync<VehicleDto>(HttpMethod.Post, url, Factory, ct);
-        }
-
-        private async Task<Result<T>> SendAsync<T>(
-            HttpMethod method,
-            string url,
-            Func<HttpContent>? contentFactory,
-            CancellationToken ct)
-        {
-            var response = await SendOnceAsync(method, url, contentFactory, ct);
-
-            if (response.StatusCode == HttpStatusCode.Unauthorized)
-            {
-                _logger.LogInformation("iAppraise returned 401 for {Method} {Url}, invalidating cached token and retrying.", method, url);
-                response.Dispose();
-                _auth.Invalidate();
-                response = await SendOnceAsync(method, url, contentFactory, ct);
-            }
+            var response = await client.PostAsync(url, form);
+            var body = await response.Content.ReadAsStringAsync();
+            sw.Stop();
+            LogResponse("CreateVehicle", response, body, sw.ElapsedMilliseconds);
 
             if (!response.IsSuccessStatusCode)
-            {
-                var body = await SafeReadAsync(response, ct);
-                _logger.LogWarning("iAppraise {Method} {Url} returned {Status}: {Body}", method, url, (int)response.StatusCode, body);
-                return new Result<T>($"iAppraise returned {(int)response.StatusCode} {response.ReasonPhrase}");
-            }
+                return new Result<VehicleDto>($"TDL CreateVehicle (dealership={ctx.DealershipId}, rego='{request.RegistrationNumber}', stock='{request.StockNumber}') returned {(int)response.StatusCode} {response.ReasonPhrase}: {body}");
 
-            try
-            {
-                var stream = await response.Content.ReadAsStreamAsync(ct);
-                var value = await JsonSerializer.DeserializeAsync<T>(stream, cancellationToken: ct);
-                if (value is null)
-                {
-                    return new Result<T>("iAppraise returned empty body.");
-                }
-                return new Result<T>(value);
-            }
-            catch (JsonException ex)
-            {
-                _logger.LogError(ex, "Failed to deserialize iAppraise response from {Method} {Url}", method, url);
-                return new Result<T>("Failed to parse iAppraise response.");
-            }
-            finally
-            {
-                response.Dispose();
-            }
+            var dto = JsonSerializer.Deserialize<VehicleDto>(body);
+            return new Result<VehicleDto>(dto!);
         }
 
-        private async Task<HttpResponseMessage> SendOnceAsync(
-            HttpMethod method,
-            string url,
-            Func<HttpContent>? contentFactory,
-            CancellationToken ct)
+        public async Task<Result<VehicleDriveDto>> StartDrive(TdlContext ctx, int driveId, int vehicleId)
         {
-            var token = await _auth.GetTokenAsync(ct);
-            var http = _httpClientFactory.CreateClient(HttpClientName);
+            var client = CreateClient(ctx);
+            var url = $"{_baseUrl}/api/vehicle-event/{driveId}/ezikey-start-drive/";
 
-            var req = new HttpRequestMessage(method, url);
-            req.Headers.TryAddWithoutValidation("Authorization", $"Token {token}");
-            if (contentFactory is not null)
-            {
-                req.Content = contentFactory();
-            }
+            using var form = new MultipartFormDataContent();
+            form.Add(new StringContent(vehicleId.ToString()), "vehicle");
 
-            return await http.SendAsync(req, ct);
+            var sw = Stopwatch.StartNew();
+            _log.LogInformation("OUT POST {Url} (dealership={Dealership}) form: vehicle={VehicleId}", url, ctx.DealershipId, vehicleId);
+
+            using var req = new HttpRequestMessage(HttpMethod.Post, url) { Content = form };
+            var response = await client.SendAsync(req);
+            var body = await response.Content.ReadAsStringAsync();
+            sw.Stop();
+            LogResponse("StartDrive", response, body, sw.ElapsedMilliseconds);
+
+            if (!response.IsSuccessStatusCode)
+                return new Result<VehicleDriveDto>($"TDL StartDrive({driveId}, vehicle={vehicleId}) returned {(int)response.StatusCode} {response.ReasonPhrase}: {body}");
+
+            var dto = JsonSerializer.Deserialize<VehicleDriveDto>(body);
+            return new Result<VehicleDriveDto>(dto!);
         }
 
-        private static async Task<string> SafeReadAsync(HttpResponseMessage response, CancellationToken ct)
+        public async Task<Result<VehicleDriveDto>> EndDrive(TdlContext ctx, int driveId, int returningOdometer, string returningFuelLevel)
         {
-            try
-            {
-                return await response.Content.ReadAsStringAsync(ct);
-            }
-            catch
-            {
-                return string.Empty;
-            }
+            var client = CreateClient(ctx);
+            // TDL's endpoint is "ezikey-return-drive" (per the integration spec) — NOT
+            // "ezikey-end-drive". Hitting the wrong path gets an HTML 404 from TDL, which
+            // reads as "the drive can't be ended" from the touchscreen's perspective.
+            var url = $"{_baseUrl}/api/vehicle-event/{driveId}/ezikey-return-drive/";
+
+            using var form = new MultipartFormDataContent();
+            form.Add(new StringContent(returningOdometer.ToString()), "returning_odometer");
+            form.Add(new StringContent(returningFuelLevel), "returning_fuel_level");
+
+            var sw = Stopwatch.StartNew();
+            _log.LogInformation("OUT POST {Url} (dealership={Dealership}) form: returning_odometer={Odo} returning_fuel_level={Fuel}",
+                url, ctx.DealershipId, returningOdometer, returningFuelLevel);
+
+            using var req = new HttpRequestMessage(HttpMethod.Post, url) { Content = form };
+            var response = await client.SendAsync(req);
+            var body = await response.Content.ReadAsStringAsync();
+            sw.Stop();
+            LogResponse("EndDrive", response, body, sw.ElapsedMilliseconds);
+
+            if (!response.IsSuccessStatusCode)
+                return new Result<VehicleDriveDto>($"TDL EndDrive({driveId}) returned {(int)response.StatusCode} {response.ReasonPhrase}: {body}");
+
+            var dto = JsonSerializer.Deserialize<VehicleDriveDto>(body);
+            return new Result<VehicleDriveDto>(dto!);
+        }
+
+        private void LogResponse(string op, HttpResponseMessage response, string body, long elapsedMs)
+        {
+            var status = (int)response.StatusCode;
+            var truncated = body.Length > MaxLoggedBodyChars
+                ? body.Substring(0, MaxLoggedBodyChars) + $" …[truncated at {MaxLoggedBodyChars} chars]"
+                : body;
+            var level = status >= 500 ? LogLevel.Error
+                      : status >= 400 ? LogLevel.Warning
+                      : LogLevel.Information;
+            _log.Log(level, "OUT {Op} <- {Status} in {Elapsed}ms body: {ResBody}", op, status, elapsedMs, truncated);
         }
     }
 }
