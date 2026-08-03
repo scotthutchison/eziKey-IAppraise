@@ -15,7 +15,7 @@ namespace Integrations
         Task<Result<VehicleEventsResponse>> GetAllUnstartedVehicleEvents(TdlContext ctx);
         Task<Result<VehicleDto>> CreateVehicle(TdlContext ctx, CreateVehicleRequestDto request);
         Task<Result<VehicleDriveDto>> StartDrive(TdlContext ctx, int driveId, int vehicleId);
-        Task<Result<VehicleDriveDto>> EndDrive(TdlContext ctx, int driveId, int returningOdometer, string returningFuelLevel);
+        Task<Result<VehicleDriveDto>> EndDrive(TdlContext ctx, int driveId, int? returningOdometer, string returningFuelLevel);
     }
 
     /// <summary>
@@ -154,7 +154,7 @@ namespace Integrations
             return new Result<VehicleDriveDto>(dto!);
         }
 
-        public async Task<Result<VehicleDriveDto>> EndDrive(TdlContext ctx, int driveId, int returningOdometer, string returningFuelLevel)
+        public async Task<Result<VehicleDriveDto>> EndDrive(TdlContext ctx, int driveId, int? returningOdometer, string returningFuelLevel)
         {
             var client = CreateClient(ctx);
             // TDL's endpoint is "ezikey-return-drive" (per the integration spec) — NOT
@@ -162,13 +162,17 @@ namespace Integrations
             // reads as "the drive can't be ended" from the touchscreen's perspective.
             var url = $"{_baseUrl}/api/vehicle-event/{driveId}/ezikey-return-drive/";
 
+            // Only send returning_odometer to TDL when the operator actually entered one.
+            // If null, omit the form field so TDL keeps whatever value it had — sending 0
+            // for "no reading entered" would corrupt the record.
             using var form = new MultipartFormDataContent();
-            form.Add(new StringContent(returningOdometer.ToString()), "returning_odometer");
+            if (returningOdometer.HasValue)
+                form.Add(new StringContent(returningOdometer.Value.ToString()), "returning_odometer");
             form.Add(new StringContent(returningFuelLevel), "returning_fuel_level");
 
             var sw = Stopwatch.StartNew();
             _log.LogInformation("OUT POST {Url} (dealership={Dealership}) form: returning_odometer={Odo} returning_fuel_level={Fuel}",
-                url, ctx.DealershipId, returningOdometer, returningFuelLevel);
+                url, ctx.DealershipId, returningOdometer?.ToString() ?? "(omitted)", returningFuelLevel);
 
             using var req = new HttpRequestMessage(HttpMethod.Post, url) { Content = form };
             var response = await client.SendAsync(req);
