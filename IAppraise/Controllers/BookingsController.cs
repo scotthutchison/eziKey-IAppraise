@@ -30,25 +30,25 @@ namespace IAppraise.Controllers
             if (!result.Succeeded)
                 return Problem(string.Join("; ", result.ErrorList), statusCode: 502);
 
-            // TDL's ezikey-get-all-unstarted-vehicle-events endpoint should return only pending
-            // bookings but has been observed returning commenced/completed drives as well.
-            // Filter defensively — an event with DateTimeStarted set is no longer pending.
+            // Trust the ezikey-get-all-unstarted-vehicle-events endpoint to have already filtered
+            // to pending events. An earlier attempt filtered client-side on DateTimeStarted == null,
+            // but that field is set by TDL when the customer creates/schedules the booking (not when
+            // the drive is started by eziKey), so filtering on it silently dropped every real
+            // pending booking whose customer had entered a schedule time.
             var events = result.Value?.VehicleEvents ?? new();
-            var bookings = events
-                .Where(e => e.DateTimeStarted == null)
-                .Select(e => new BookingSummaryDto
-                {
-                    BookingId = e.Id,
-                    CustomerFirstName = e.Customer?.FirstName,
-                    CustomerLastName = e.Customer?.LastName,
-                    CustomerPhoneNumber = e.Customer?.PhoneNumber,
-                    CustomerEmail = e.Customer?.Email,
-                    CustomerSuburb = e.Customer?.Suburb,
-                    CustomerTitle = e.Customer?.Title,
-                    DealerFirstName = e.Dealer?.FirstName,
-                    DealerLastName = e.Dealer?.LastName,
-                    DateTimeStarted = e.DateTimeStarted,
-                });
+            var bookings = events.Select(e => new BookingSummaryDto
+            {
+                BookingId = e.Id,
+                CustomerFirstName = e.Customer?.FirstName,
+                CustomerLastName = e.Customer?.LastName,
+                CustomerPhoneNumber = e.Customer?.PhoneNumber,
+                CustomerEmail = e.Customer?.Email,
+                CustomerSuburb = e.Customer?.Suburb,
+                CustomerTitle = e.Customer?.Title,
+                DealerFirstName = e.Dealer?.FirstName,
+                DealerLastName = e.Dealer?.LastName,
+                DateTimeStarted = e.DateTimeStarted,
+            });
 
             return Ok(bookings);
         }
