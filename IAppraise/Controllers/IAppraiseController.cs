@@ -14,12 +14,15 @@ namespace IAppraise.Controllers
     {
         private const string DealershipHeader = "X-Tdl-Dealership-Id";
         private const string TokenHeader = "X-Tdl-Api-Token";
+        private const string ApiKeyHeader = "X-Api-Key";
 
         private readonly IIAppraiseApi _iAppraiseApi;
+        private readonly IConfiguration _config;
 
-        public IAppraiseController(IIAppraiseApi iAppraiseApi)
+        public IAppraiseController(IIAppraiseApi iAppraiseApi, IConfiguration config)
         {
             _iAppraiseApi = iAppraiseApi;
+            _config = config;
         }
 
         [HttpGet("vehicles")]
@@ -94,24 +97,32 @@ namespace IAppraise.Controllers
             var dealershipRaw = Request.Headers[DealershipHeader].ToString();
             var token = Request.Headers[TokenHeader].ToString();
 
-            if (string.IsNullOrWhiteSpace(dealershipRaw))
+            if (!string.IsNullOrWhiteSpace(dealershipRaw) && !string.IsNullOrWhiteSpace(token))
             {
-                badRequest = BadRequest($"Missing required header '{DealershipHeader}'.");
-                return false;
-            }
-            if (!int.TryParse(dealershipRaw, out var dealershipId))
-            {
-                badRequest = BadRequest($"Header '{DealershipHeader}' must be an integer; got '{dealershipRaw}'.");
-                return false;
-            }
-            if (string.IsNullOrWhiteSpace(token))
-            {
-                badRequest = BadRequest($"Missing required header '{TokenHeader}'.");
-                return false;
+                if (!int.TryParse(dealershipRaw, out var dealershipId))
+                {
+                    badRequest = BadRequest($"Header '{DealershipHeader}' must be an integer; got '{dealershipRaw}'.");
+                    return false;
+                }
+                ctx = new TdlContext(dealershipId, token);
+                return true;
             }
 
-            ctx = new TdlContext(dealershipId, token);
-            return true;
+            var apiKey = Request.Headers[ApiKeyHeader].ToString();
+            var configuredKey = _config["IAppraise:ApiKey"] ?? "";
+            if (!string.IsNullOrWhiteSpace(apiKey) && apiKey == configuredKey)
+            {
+                var defaultDealership = int.Parse(_config["IAppraise:DefaultDealershipId"] ?? "0");
+                var defaultToken = _config["IAppraise:DefaultTdlToken"] ?? "";
+                if (defaultDealership > 0 && !string.IsNullOrWhiteSpace(defaultToken))
+                {
+                    ctx = new TdlContext(defaultDealership, defaultToken);
+                    return true;
+                }
+            }
+
+            badRequest = Unauthorized("Provide X-Tdl-Dealership-Id + X-Tdl-Api-Token headers, or a valid X-Api-Key.");
+            return false;
         }
     }
 }
